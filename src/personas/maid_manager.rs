@@ -382,7 +382,9 @@ impl MaidManager {
         // exist.
         let client_name = utils::client_name(&src);
         let is_admin = match src {
-            Authority::Client { client_key, .. } => Some(client_key) == self.invite_key,
+            Authority::Client { client_id, .. } => {
+                Some(*client_id.signing_public_key()) == self.invite_key
+            }
             _ => false,
         };
         let mut error_opt = None;
