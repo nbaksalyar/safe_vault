@@ -226,7 +226,7 @@ impl SourceElder {
                 }
                 if address.kind() == IDataKind::Pub || client.has_balance {
                     Some(Action::ForwardClientRequest {
-                        client_name: *client.public_id.name(),
+                        client_id: client.public_id.clone(),
                         request,
                         message_id,
                     })
@@ -251,7 +251,7 @@ impl SourceElder {
                 }
                 if client.has_balance {
                     Some(Action::ForwardClientRequest {
-                        client_name: *client.public_id.name(),
+                        client_id: client.public_id.clone(),
                         request,
                         message_id,
                     })
@@ -332,7 +332,7 @@ impl SourceElder {
             // ===== Login packets =====
             //
             CreateLoginPacket(..) => Some(Action::ForwardClientRequest {
-                client_name: *client.public_id.name(),
+                client_id: client.public_id.clone(),
                 request,
                 message_id,
             }),
@@ -342,7 +342,7 @@ impl SourceElder {
 
                 // if registered_client == ClientState::Registered {
                 Some(Action::ForwardClientRequest {
-                    client_name: *client.public_id.name(),
+                    client_id: client.public_id.clone(),
                     request,
                     message_id,
                 })
@@ -454,7 +454,7 @@ impl SourceElder {
         }
 
         Some(Action::ForwardClientRequest {
-            client_name: *client.public_id.name(),
+            client_id: client.public_id.clone(),
             request,
             message_id,
         })

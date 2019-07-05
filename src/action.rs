@@ -6,7 +6,8 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use safe_nd::{MessageId, Request, Response, XorName};
+use crate::rpc::VaultMessage;
+use safe_nd::{MessageId, PublicId, Request, Response, XorName};
 use std::collections::BTreeSet;
 
 #[derive(Debug)]
@@ -14,8 +15,7 @@ use std::collections::BTreeSet;
 pub(crate) enum Action {
     // Send a validated client request from src elders to dst elders.
     ForwardClientRequest {
-        // TODO - confirm this.  ATM, this represents the owner's name if the src is an app.
-        client_name: XorName,
+        client_id: PublicId,
         request: Request,
         message_id: MessageId,
     },
@@ -27,7 +27,7 @@ pub(crate) enum Action {
     },
     RespondToSrcElders {
         sender: XorName,
-        client_name: XorName,
+        client_id: PublicId,
         response: Response,
         message_id: MessageId,
     },
@@ -35,7 +35,6 @@ pub(crate) enum Action {
     SendToPeers {
         sender: XorName,
         targets: BTreeSet<XorName>,
-        request: Request,
-        message_id: MessageId,
+        message: VaultMessage,
     },
 }

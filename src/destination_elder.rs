@@ -14,6 +14,7 @@ use crate::{
         error::Error as ChunkStoreError, AppendOnlyChunkStore, ImmutableChunkStore,
         LoginPacketChunkStore, MutableChunkStore,
     },
+    rpc::VaultMessage,
     utils,
     vault::Init,
     Result, ToDbKey,
@@ -22,8 +23,8 @@ use idata_op::{IDataOp, OpType};
 use log::{error, trace, warn};
 use pickledb::PickleDb;
 use safe_nd::{
-    Error as NdError, IData, IDataAddress, LoginPacket, MessageId, NodePublicId, Request, Response,
-    Result as NdResult, XorName,
+    Error as NdError, IData, IDataAddress, LoginPacket, MessageId, NodePublicId, PublicId, Request,
+    Response, Result as NdResult, XorName,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -118,9 +119,19 @@ impl DestinationElder {
         })
     }
 
+    pub fn handle_vault_message(&mut self, _src: XorName, message: VaultMessage) -> Option<Action> {
+        match message {
+            VaultMessage::ClientRequest {
+                request,
+                requester,
+                message_id,
+            } => self.handle_request(requester, request, message_id),
+        }
+    }
+
     pub fn handle_request(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         request: Request,
         message_id: MessageId,
     ) -> Option<Action> {
@@ -130,7 +141,7 @@ impl DestinationElder {
             self,
             request,
             message_id,
-            src
+            requester
         );
         // TODO - remove this
         #[allow(unused)]
@@ -138,10 +149,10 @@ impl DestinationElder {
             //
             // ===== Immutable Data =====
             //
-            PutIData(kind) => self.handle_put_idata_req(src, kind, message_id),
-            GetIData(address) => self.handle_get_idata_req(src, address, message_id),
+            PutIData(kind) => self.handle_put_idata_req(requester, kind, message_id),
+            GetIData(address) => self.handle_get_idata_req(requester, address, message_id),
             DeleteUnpubIData(address) => {
-                self.handle_delete_unpub_idata_req(src, address, message_id)
+                self.handle_delete_unpub_idata_req(requester, address, message_id)
             }
             //
             // ===== Mutable Data =====
@@ -228,14 +239,14 @@ impl DestinationElder {
             // ===== Login packets =====
             //
             CreateLoginPacket(ref new_login_packet) => {
-                self.handle_create_login_packet_req(src, new_login_packet, message_id)
+                self.handle_create_login_packet_req(requester, new_login_packet, message_id)
             }
             UpdateLoginPacket(ref updated_login_packet) => {
-                self.handle_update_login_packet_req(src, updated_login_packet, message_id)
+                self.handle_update_login_packet_req(requester, updated_login_packet, message_id)
             }
             CreateLoginPacketFor { .. } => unimplemented!(),
             GetLoginPacket(ref address) => {
-                self.handle_get_login_packet_req(src, address, message_id)
+                self.handle_get_login_packet_req(requester, address, message_id)
             }
             //
             // ===== Invalid =====
@@ -319,10 +330,19 @@ impl DestinationElder {
 
     fn handle_update_login_packet_req(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         updated_login_packet: &LoginPacket,
         message_id: MessageId,
     ) -> Option<Action> {
+        let requester_pk = match requester {
+            PublicId::Client(ref client) => client.public_key(),
+            PublicId::App(ref app) => app.public_key(),
+            PublicId::Node(..) => {
+                // TODO: drop the connection, possible malice
+                warn!("Unexpected PublicId::Node requester: {:?}", requester);
+                return None;
+            }
+        };
         let result = self
             .login_packet_chunks
             .get(updated_login_packet.destination())
@@ -334,7 +354,7 @@ impl DestinationElder {
                 if !updated_login_packet.size_is_valid() {
                     return Err(NdError::ExceededSize);
                 }
-                if XorName::from(*existing_login_packet.authorised_getter()) != src {
+                if existing_login_packet.authorised_getter() != requester_pk {
                     // Request does not come from the owner
                     Err(NdError::AccessDenied)
                 } else {
@@ -345,7 +365,7 @@ impl DestinationElder {
             });
         Some(Action::RespondToSrcElders {
             sender: *updated_login_packet.destination(),
-            client_name: src,
+            client_id: requester,
             response: Response::Mutation(result),
             message_id,
         })
@@ -353,7 +373,7 @@ impl DestinationElder {
 
     fn handle_create_login_packet_req(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         new_login_packet: &LoginPacket,
         message_id: MessageId,
     ) -> Option<Action> {
@@ -369,7 +389,7 @@ impl DestinationElder {
         };
         Some(Action::RespondToSrcElders {
             sender: *new_login_packet.destination(),
-            client_name: src,
+            client_id: requester,
             response: Response::Mutation(result),
             message_id,
         })
@@ -377,10 +397,19 @@ impl DestinationElder {
 
     fn handle_get_login_packet_req(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         address: &XorName,
         message_id: MessageId,
     ) -> Option<Action> {
+        let requester_pk = match requester {
+            PublicId::Client(ref client) => client.public_key(),
+            PublicId::App(ref app) => app.public_key(),
+            PublicId::Node(..) => {
+                // TODO: drop the connection, possible malice
+                warn!("Unexpected PublicId::Node requester: {:?}", requester);
+                return None;
+            }
+        };
         let result = self
             .login_packet_chunks
             .get(address)
@@ -389,7 +418,7 @@ impl DestinationElder {
                 error => error.to_string().into(),
             })
             .and_then(|login_packet| {
-                if XorName::from(*login_packet.authorised_getter()) != src {
+                if login_packet.authorised_getter() != requester_pk {
                     // Request does not come from the owner
                     Err(NdError::AccessDenied)
                 } else {
@@ -400,7 +429,7 @@ impl DestinationElder {
                 }
             });
         Some(Action::RespondToSrcElders {
-            client_name: src,
+            client_id: requester,
             sender: *address,
             response: Response::GetLoginPacket(result),
             message_id,
@@ -409,21 +438,23 @@ impl DestinationElder {
 
     fn handle_put_idata_req(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         kind: IData,
         message_id: MessageId,
     ) -> Option<Action> {
-        if &src == kind.name() {
+        if requester.name() == kind.name() {
             // Since the src is the chunk's name, this message was sent by the dst elders to us as a
             // single dst elder, implying that we're a dst elder chosen to store the chunk.
             self.store_idata(kind, message_id)
         } else {
             // We're acting as dst elder, received request from src elders
             let data_name = *kind.name();
+
+            let client_id = requester.clone();
             let respond = |result: NdResult<()>| {
                 Some(Action::RespondToSrcElders {
                     sender: data_name,
-                    client_name: src,
+                    client_id,
                     response: Response::Mutation(result),
                     message_id,
                 })
@@ -449,7 +480,7 @@ impl DestinationElder {
             let data_name = *kind.name();
             // Can't fail
             let idata_op = unwrap!(IDataOp::new(
-                src,
+                requester.clone(),
                 Request::PutIData(kind),
                 target_holders.clone()
             ));
@@ -460,8 +491,11 @@ impl DestinationElder {
                     Some(Action::SendToPeers {
                         sender: data_name,
                         targets: target_holders,
-                        request: idata_op.request().clone(),
-                        message_id,
+                        message: VaultMessage::ClientRequest {
+                            request: idata_op.request().clone(),
+                            requester,
+                            message_id,
+                        },
                     })
                 }
             }
@@ -530,7 +564,7 @@ impl DestinationElder {
         self.remove_idata_op_if_concluded(&message_id)
             .map(|idata_op| Action::RespondToSrcElders {
                 sender: *idata_address.name(),
-                client_name: *idata_op.client(),
+                client_id: idata_op.client().clone(),
                 response: Response::Mutation(Ok(())),
                 message_id,
             })
@@ -564,18 +598,19 @@ impl DestinationElder {
 
     fn handle_get_idata_req(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         address: IDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        if &src == address.name() {
+        if requester.name() == address.name() {
             // The message was sent by the dst elders to us as the one who is supposed to store the
             // chunk. See the sent Get request below.
             self.get_idata(address, message_id)
         } else {
+            let client_id = requester.clone();
             let error_response = |error: NdError| Action::RespondToSrcElders {
                 sender: *address.name(),
-                client_name: src,
+                client_id,
                 response: Response::GetIData(Err(error)),
                 message_id,
             };
@@ -588,7 +623,7 @@ impl DestinationElder {
 
             // Can't fail
             let idata_op = unwrap!(IDataOp::new(
-                src,
+                requester.clone(),
                 Request::GetIData(address),
                 metadata.holders.clone()
             ));
@@ -599,8 +634,11 @@ impl DestinationElder {
                     Some(Action::SendToPeers {
                         sender: *address.name(),
                         targets: metadata.holders,
-                        request: idata_op.request().clone(),
-                        message_id,
+                        message: VaultMessage::ClientRequest {
+                            request: idata_op.request().clone(),
+                            requester,
+                            message_id,
+                        },
                     })
                 }
             }
@@ -628,14 +666,23 @@ impl DestinationElder {
     }
 
     fn get_idata(&self, address: IDataAddress, message_id: MessageId) -> Option<Action> {
-        let client = self.client_name(&message_id)?;
+        let client = self.client_id(&message_id)?;
+        let client_pk = match client {
+            PublicId::Client(ref client) => client.public_key(),
+            PublicId::App(ref app) => app.public_key(),
+            PublicId::Node(..) => {
+                // TODO: drop the connection, possible malice
+                warn!("Unexpected PublicId::Node requester: {:?}", client);
+                return None;
+            }
+        };
         let result = self
             .immutable_chunks
             .get(&address)
             .map_err(|error| error.to_string().into())
             .and_then(|kind| match kind {
                 IData::Unpub(ref data) => {
-                    if &XorName::from(*data.owner()) != client {
+                    if data.owner() != client_pk {
                         Err(NdError::AccessDenied)
                     } else {
                         Ok(kind)
@@ -652,16 +699,26 @@ impl DestinationElder {
 
     fn handle_delete_unpub_idata_req(
         &mut self,
-        src: XorName,
+        requester: PublicId,
         address: IDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        if &src == address.name() {
+        let requester_pk = match requester {
+            PublicId::Client(ref client) => client.public_key(),
+            PublicId::App(ref app) => app.public_key(),
+            PublicId::Node(..) => {
+                // TODO: drop the connection, possible malice
+                warn!("Unexpected PublicId::Node requester: {:?}", requester);
+                return None;
+            }
+        };
+        if XorName::from(*requester_pk) == *address.name() {
             self.delete_unpub_idata(address, message_id)
         } else {
+            let client_id = requester.clone();
             let error_response = |error: NdError| Action::RespondToSrcElders {
                 sender: *address.name(),
-                client_name: src,
+                client_id,
                 response: Response::Mutation(Err(error)),
                 message_id,
             };
@@ -674,7 +731,7 @@ impl DestinationElder {
 
             // Can't fail
             let idata_op = unwrap!(IDataOp::new(
-                src,
+                requester.clone(),
                 Request::DeleteUnpubIData(address),
                 metadata.holders.clone()
             ));
@@ -685,8 +742,11 @@ impl DestinationElder {
                     Some(Action::SendToPeers {
                         sender: *address.name(),
                         targets: metadata.holders,
-                        request: idata_op.request().clone(),
-                        message_id,
+                        message: VaultMessage::ClientRequest {
+                            request: idata_op.request().clone(),
+                            requester,
+                            message_id,
+                        },
                     })
                 }
             }
@@ -698,7 +758,16 @@ impl DestinationElder {
         address: IDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let client = self.client_name(&message_id)?;
+        let client = self.client_id(&message_id)?;
+        let client_pk = match client {
+            PublicId::Client(ref client) => client.public_key(),
+            PublicId::App(ref app) => app.public_key(),
+            PublicId::Node(..) => {
+                // TODO: drop the connection, possible malice
+                warn!("Unexpected PublicId::Node requester: {:?}", client);
+                return None;
+            }
+        };
         // First we need to read the chunk to verify the permissions
         let result = self
             .immutable_chunks
@@ -706,7 +775,7 @@ impl DestinationElder {
             .map_err(|error| error.to_string().into())
             .and_then(|kind| match kind {
                 IData::Unpub(ref data) => {
-                    if &XorName::from(*data.owner()) != client {
+                    if data.owner() != client_pk {
                         Err(NdError::AccessDenied)
                     } else {
                         Ok(())
@@ -747,7 +816,7 @@ impl DestinationElder {
         action
     }
 
-    fn client_name(&self, message_id: &MessageId) -> Option<&XorName> {
+    fn client_id(&self, message_id: &MessageId) -> Option<&PublicId> {
         self.idata_op(message_id).map(IDataOp::client)
     }
 
@@ -787,6 +856,6 @@ impl DestinationElder {
 
 impl Display for DestinationElder {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
-        write!(formatter, "{}", self.id.name())
+        write!(formatter, "{}", self.id)
     }
 }

@@ -17,8 +17,8 @@ use crate::{
 };
 use bincode;
 use crossbeam_channel::Receiver;
-use log::{error, info};
-use safe_nd::{NodeFullId, XorName};
+use log::{error, info, warn};
+use safe_nd::{NodeFullId, PublicId, XorName};
 use std::{
     fmt::{self, Display, Formatter},
     fs,
@@ -167,7 +167,7 @@ impl Vault {
         use Action::*;
         match action {
             ForwardClientRequest {
-                client_name,
+                client_id,
                 request,
                 message_id,
             } => {
@@ -184,11 +184,9 @@ impl Vault {
                 //        same handler which Routing will call after receiving a message.
 
                 if self.self_is_elder_for(&dst_elders_address) {
-                    return self.destination_elder_mut()?.handle_request(
-                        client_name,
-                        request,
-                        message_id,
-                    );
+                    return self
+                        .destination_elder_mut()?
+                        .handle_request(client_id, request, message_id);
                 }
                 None
             }
@@ -206,11 +204,22 @@ impl Vault {
             }
             RespondToSrcElders {
                 sender,
-                client_name,
+                client_id,
                 response,
                 message_id,
                 ..
             } => {
+                let client_pk = match client_id {
+                    PublicId::Client(ref client) => client.public_key(),
+                    PublicId::App(ref app) => app.owner().public_key(),
+                    PublicId::Node(..) => {
+                        // TODO: drop the connection, possible malice
+                        warn!("Unexpected PublicId::Node requester: {:?}", client_id);
+                        return None;
+                    }
+                };
+                let client_name = XorName::from(*client_pk);
+
                 // TODO - once Routing is integrated, we'll construct the full message to send
                 //        onwards, and then if we're also part of the src elders, we'll call that
                 //        same handler which Routing will call after receiving a message.
@@ -228,17 +237,14 @@ impl Vault {
             SendToPeers {
                 sender,
                 targets,
-                request,
-                message_id,
+                message,
             } => {
                 let mut next_action = None;
                 for target in targets {
                     if target == *self.id.public_id().name() {
-                        next_action = self.destination_elder_mut()?.handle_request(
-                            sender,
-                            request.clone(),
-                            message_id,
-                        );
+                        next_action = self
+                            .destination_elder_mut()?
+                            .handle_vault_message(sender, message.clone());
                         // } else {
                         //     Send to target
                     }
