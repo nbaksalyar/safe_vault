@@ -54,12 +54,14 @@
 mod common;
 
 use self::common::{Environment, TestClient, TestVault};
-use rand::Rng;
+use rand::{distributions::Standard, Rng};
 use safe_nd::{
-    Coins, Error as NdError, IData, IDataAddress, LoginPacket, PubImmutableData, Request, Response,
-    UnpubImmutableData, XorName,
+    Coins, Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAddress, MDataValue,
+    PubImmutableData, Request, Response, SeqMutableData, UnpubImmutableData, UnseqMutableData,
+    XorName,
 };
 use safe_vault::COST_OF_PUT;
+use std::collections::BTreeMap;
 use unwrap::unwrap;
 
 #[test]
@@ -805,4 +807,185 @@ fn delete_immutable_data() {
         Request::DeleteUnpubIData(IDataAddress::Unpub(unpub_idata_address)),
         Response::Mutation(Err(NdError::NoSuchData)),
     )
+}
+
+#[test]
+fn put_seq_mutable_data() {
+    let mut env = Environment::new();
+    let mut vault = TestVault::new();
+    let conn_info = vault.connection_info();
+
+    let mut client = TestClient::new(env.rng());
+    common::establish_connection(&mut env, &mut client, &mut vault);
+
+    // Try to put sequenced Mutable Data
+    let name: XorName = env.rng().gen();
+    let tag = 100;
+    let mdata = SeqMutableData::new(name, tag, *client.public_id().public_key());
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::PutMData(MData::Seq(mdata.clone())),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Get Mutable Data and verify it's been stored correctly.
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::GetMData(MDataAddress::Seq { name, tag }),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::GetMData(Ok(MData::Seq(data))) => assert_eq!(data, mdata),
+        x => unexpected!(x),
+    }
+}
+
+#[test]
+fn put_unseq_mutable_data() {
+    let mut env = Environment::new();
+    let mut vault = TestVault::new();
+    let conn_info = vault.connection_info();
+
+    let mut client = TestClient::new(env.rng());
+    common::establish_connection(&mut env, &mut client, &mut vault);
+
+    // Try to put unsequenced Mutable Data
+    let name: XorName = env.rng().gen();
+    let tag = 100;
+    let mdata = UnseqMutableData::new(name, tag, *client.public_id().public_key());
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::PutMData(MData::Unseq(mdata.clone())),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Get Mutable Data and verify it's been stored correctly.
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::GetMData(MDataAddress::Unseq { name, tag }),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::GetMData(Ok(MData::Unseq(data))) => assert_eq!(data, mdata),
+        x => unexpected!(x),
+    }
+}
+
+#[test]
+fn read_seq_mutable_data() {
+    let mut env = Environment::new();
+    let mut vault = TestVault::new();
+    let conn_info = vault.connection_info();
+
+    let mut client = TestClient::new(env.rng());
+    common::establish_connection(&mut env, &mut client, &mut vault);
+
+    // Try to put sequenced Mutable Data with several entries.
+    let mut entries = BTreeMap::new();
+    for _i in 1..4 {
+        let _ = entries.insert(
+            env.rng().sample_iter(&Standard).take(8).collect(),
+            MDataValue {
+                data: env.rng().sample_iter(&Standard).take(8).collect(),
+                version: 0,
+            },
+        );
+    }
+    let name: XorName = env.rng().gen();
+    let tag = 100;
+    let mdata = SeqMutableData::new_with_data(
+        name,
+        tag,
+        entries.clone(),
+        Default::default(),
+        *client.public_id().public_key(),
+    );
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::PutMData(MData::Seq(mdata.clone())),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Get version.
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::GetMDataVersion(MDataAddress::Seq { name, tag }),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::GetMDataVersion(Ok(version)) => assert_eq!(version, 0),
+        x => unexpected!(x),
+    }
+
+    // Get keys.
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::ListMDataKeys(MDataAddress::Seq { name, tag }),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::ListMDataKeys(Ok(keys)) => assert_eq!(keys, entries.keys().cloned().collect()),
+        x => unexpected!(x),
+    }
+
+    // Get values.
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::ListMDataValues(MDataAddress::Seq { name, tag }),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::ListSeqMDataValues(Ok(values)) => {
+            assert_eq!(values, entries.values().cloned().collect::<Vec<_>>())
+        }
+        x => unexpected!(x),
+    }
+
+    // Get entries.
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::ListMDataEntries(MDataAddress::Seq { name, tag }),
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::ListSeqMDataEntries(Ok(fetched_entries)) => assert_eq!(fetched_entries, entries),
+        x => unexpected!(x),
+    }
+
+    // Get a value by key.
+    let key = unwrap!(entries.keys().cloned().nth(0));
+    let message_id = client.send_request(
+        conn_info.clone(),
+        Request::GetMDataValue {
+            address: MDataAddress::Seq { name, tag },
+            key: key.clone(),
+        },
+    );
+    env.poll(&mut vault);
+
+    match client.expect_response(message_id) {
+        Response::GetSeqMDataValue(Ok(val)) => assert_eq!(val, entries[&key]),
+        x => unexpected!(x),
+    }
 }

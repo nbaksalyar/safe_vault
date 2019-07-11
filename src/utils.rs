@@ -96,6 +96,7 @@ pub(crate) fn dst_elders_address(request: &Request) -> Option<&XorName> {
         PutAData(ref data) => Some(data.name()),
         GetAData(ref address)
         | GetADataShell { ref address, .. }
+        | GetADataValue { ref address, .. }
         | DeleteAData(ref address)
         | GetADataRange { ref address, .. }
         | GetADataIndices(ref address)

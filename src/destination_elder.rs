@@ -23,8 +23,8 @@ use idata_op::{IDataOp, OpType};
 use log::{error, info, trace, warn};
 use pickledb::PickleDb;
 use safe_nd::{
-    Error as NdError, IData, IDataAddress, LoginPacket, MessageId, NodePublicId, PublicId, Request,
-    Response, Result as NdResult, XorName,
+    Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAddress, MDataPermissionSet,
+    MessageId, NodePublicId, PublicId, PublicKey, Request, Response, Result as NdResult, XorName,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -164,15 +164,36 @@ impl DestinationElder {
             //
             // ===== Mutable Data =====
             //
-            PutMData(data) => unimplemented!(),
-            GetMData(address) => unimplemented!(),
-            GetMDataValue { address, key } => unimplemented!(),
+            PutMData(data) => self.handle_put_mdata_req(requester, data, message_id),
+            GetMData(address) => {
+                self.handle_get_mdata_req(&request, requester, address, message_id)
+            }
+            GetMDataValue { address, ref key } => {
+                self.handle_get_mdata_value_req(&request, requester, address, key, message_id)
+            }
             DeleteMData(address) => unimplemented!(),
-            GetMDataShell(address) => unimplemented!(),
-            GetMDataVersion(address) => unimplemented!(),
-            ListMDataEntries(address) => unimplemented!(),
-            ListMDataKeys(address) => unimplemented!(),
-            ListMDataValues(address) => unimplemented!(),
+            GetMDataShell(address) => {
+                self.handle_get_mdata_shell_req(&request, requester, address, message_id)
+            }
+            GetMDataVersion(address) => {
+                self.handle_get_mdata_version_req(&request, requester, address, message_id)
+            }
+            ListMDataEntries(address) => {
+                self.handle_list_mdata_entries_req(&request, requester, address, message_id)
+            }
+            ListMDataKeys(address) => {
+                self.handle_list_mdata_keys_req(&request, requester, address, message_id)
+            }
+            ListMDataValues(address) => {
+                self.handle_list_mdata_values_req(&request, requester, address, message_id)
+            }
+            ListMDataPermissions(address) => {
+                self.handle_list_mdata_permissions_req(&request, requester, address, message_id)
+            }
+            ListMDataUserPermissions { address, user } => self
+                .handle_list_mdata_user_permissions_req(
+                    &request, requester, address, user, message_id,
+                ),
             SetMDataUserPermissions {
                 address,
                 user,
@@ -184,8 +205,6 @@ impl DestinationElder {
                 user,
                 version,
             } => unimplemented!(),
-            ListMDataPermissions(address) => unimplemented!(),
-            ListMDataUserPermissions { address, user } => unimplemented!(),
             MutateSeqMDataEntries { address, actions } => unimplemented!(),
             MutateUnseqMDataEntries { address, actions } => unimplemented!(),
             //
@@ -219,15 +238,22 @@ impl DestinationElder {
                 address,
                 owners_index,
             } => unimplemented!(),
+            GetADataValue { .. } => unimplemented!(),
             AddPubADataPermissions {
                 address,
                 permissions,
+                permissions_idx,
             } => unimplemented!(),
             AddUnpubADataPermissions {
                 address,
                 permissions,
+                permissions_idx,
             } => unimplemented!(),
-            SetADataOwner { address, owner } => unimplemented!(),
+            SetADataOwner {
+                address,
+                owner,
+                owners_idx,
+            } => unimplemented!(),
             AppendSeq { append, index } => unimplemented!(),
             AppendUnseq(operation) => unimplemented!(),
             //
@@ -291,21 +317,6 @@ impl DestinationElder {
             //
             GetIData(result) => self.handle_get_idata_resp(src, result, message_id),
             //
-            // ===== Mutable Data =====
-            //
-            GetMData(result) => unimplemented!(),
-            GetMDataShell(result) => unimplemented!(),
-            GetMDataVersion(result) => unimplemented!(),
-            ListUnseqMDataEntries(result) => unimplemented!(),
-            ListSeqMDataEntries(result) => unimplemented!(),
-            ListMDataKeys(result) => unimplemented!(),
-            ListSeqMDataValues(result) => unimplemented!(),
-            ListUnseqMDataValues(result) => unimplemented!(),
-            ListMDataUserPermissions(result) => unimplemented!(),
-            ListMDataPermissions(result) => unimplemented!(),
-            GetSeqMDataValue(result) => unimplemented!(),
-            GetUnseqMDataValue(result) => unimplemented!(),
-            //
             // ===== Append Only Data =====
             //
             GetAData(result) => unimplemented!(),
@@ -321,7 +332,23 @@ impl DestinationElder {
             //
             // ===== Invalid =====
             //
-            GetBalance(_) | Transaction(_) | ListAuthKeysAndVersion(_) | GetLoginPacket(_) => {
+            GetMDataShell(_)
+            | GetMDataVersion(_)
+            | ListUnseqMDataEntries(_)
+            | ListSeqMDataEntries(_)
+            | ListMDataKeys(_)
+            | ListSeqMDataValues(_)
+            | ListUnseqMDataValues(_)
+            | ListMDataUserPermissions(_)
+            | ListMDataPermissions(_)
+            | GetSeqMDataValue(_)
+            | GetUnseqMDataValue(_)
+            | GetMData(_)
+            | GetADataValue(_)
+            | GetBalance(_)
+            | Transaction(_)
+            | ListAuthKeysAndVersion(_)
+            | GetLoginPacket(_) => {
                 error!(
                     "{}: Should not receive {:?} as a destination elder.",
                     self, response
@@ -329,6 +356,281 @@ impl DestinationElder {
                 None
             }
         }
+    }
+
+    /// Get MData from the chunk store and check permissions.
+    fn get_mdata_chunk(
+        &mut self,
+        address: &MDataAddress,
+        requester: &PublicId,
+        request: &Request,
+    ) -> NdResult<MData> {
+        let requester_pk = utils::own_key(&requester).ok_or_else(|| NdError::AccessDenied)?;
+
+        self.mutable_chunks
+            .get(&address)
+            .map_err(|e| match e {
+                ChunkStoreError::NoSuchChunk => NdError::NoSuchData,
+                error => error.to_string().into(),
+            })
+            .and_then(move |mdata| {
+                mdata
+                    .check_permissions(request, *requester_pk)
+                    .map(move |_| mdata)
+            })
+    }
+
+    /// Put MData.
+    fn handle_put_mdata_req(
+        &mut self,
+        requester: PublicId,
+        data: MData,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = if self.mutable_chunks.has(data.address()) {
+            Err(NdError::DataExists)
+        } else {
+            // TODO: check owner
+            self.mutable_chunks
+                .put(&data)
+                .map_err(|error| error.to_string().into())
+        };
+        Some(Action::RespondToSrcElders {
+            sender: *data.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::Mutation(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Get entire MData.
+    fn handle_get_mdata_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = self.get_mdata_chunk(&address, &requester, request);
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::GetMData(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData shell.
+    fn handle_get_mdata_shell_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = self
+            .get_mdata_chunk(&address, &requester, request)
+            .map(|data| data.shell());
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::GetMDataShell(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData version.
+    fn handle_get_mdata_version_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = self
+            .get_mdata_chunk(&address, &requester, request)
+            .map(|data| data.version());
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::GetMDataVersion(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData value.
+    fn handle_get_mdata_value_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        key: &[u8],
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let res = self.get_mdata_chunk(&address, &requester, request);
+
+        let response = if address.is_seq() {
+            Response::GetSeqMDataValue(res.and_then(|data| match data {
+                MData::Seq(md) => md.get(key).cloned().ok_or_else(|| NdError::NoSuchEntry),
+                MData::Unseq(..) => Err(NdError::AccessDenied), // FIXME
+            }))
+        } else {
+            Response::GetUnseqMDataValue(res.and_then(|data| match data {
+                MData::Unseq(md) => md.get(key).cloned().ok_or_else(|| NdError::NoSuchEntry),
+                MData::Seq(..) => Err(NdError::AccessDenied), // FIXME
+            }))
+        };
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response,
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData keys.
+    fn handle_list_mdata_keys_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = self
+            .get_mdata_chunk(&address, &requester, request)
+            .map(|data| data.keys());
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::ListMDataKeys(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData values.
+    fn handle_list_mdata_values_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let res = self.get_mdata_chunk(&address, &requester, request);
+
+        let response = if address.is_seq() {
+            Response::ListSeqMDataValues(res.and_then(|data| match data {
+                MData::Seq(md) => Ok(md.values()),
+                MData::Unseq(..) => Err(NdError::AccessDenied), // FIXME
+            }))
+        } else {
+            Response::ListUnseqMDataValues(res.and_then(|data| match data {
+                MData::Unseq(md) => Ok(md.values()),
+                MData::Seq(..) => Err(NdError::AccessDenied), // FIXME
+            }))
+        };
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response,
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData entries.
+    fn handle_list_mdata_entries_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let res = self.get_mdata_chunk(&address, &requester, request);
+
+        let response = if address.is_seq() {
+            Response::ListSeqMDataEntries(res.and_then(|data| match data {
+                MData::Seq(md) => Ok(md.entries().clone()),
+                MData::Unseq(..) => Err(NdError::AccessDenied), // FIXME
+            }))
+        } else {
+            Response::ListUnseqMDataEntries(res.and_then(|data| match data {
+                MData::Unseq(md) => Ok(md.entries().clone()),
+                MData::Seq(..) => Err(NdError::AccessDenied), // FIXME
+            }))
+        };
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response,
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData permissions.
+    fn handle_list_mdata_permissions_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = self
+            .get_mdata_chunk(&address, &requester, request)
+            .map(|data| data.permissions());
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::ListMDataPermissions(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Get MData user permissions.
+    fn handle_list_mdata_user_permissions_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        user: PublicKey,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let result = self
+            .get_mdata_chunk(&address, &requester, request)
+            .and_then(|data| data.user_permissions(user).map(MDataPermissionSet::clone));
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::ListMDataUserPermissions(result),
+                message_id,
+            },
+        })
     }
 
     fn handle_update_login_packet_req(
