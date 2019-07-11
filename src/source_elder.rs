@@ -232,8 +232,6 @@ impl SourceElder {
             DeleteMData(ref address) => unimplemented!(),
             SetMDataUserPermissions { ref address, .. } => unimplemented!(),
             DelMDataUserPermissions { ref address, .. } => unimplemented!(),
-            MutateSeqMDataEntries { ref address, .. } => unimplemented!(),
-            MutateUnseqMDataEntries { ref address, .. } => unimplemented!(),
             //
             // ===== Append Only Data =====
             //
@@ -306,6 +304,8 @@ impl SourceElder {
             | ListMDataEntries(..)
             | ListMDataKeys(..)
             | ListMDataValues(..)
+            | MutateSeqMDataEntries { .. }
+            | MutateUnseqMDataEntries { .. }
             | CreateLoginPacketFor { .. }
             | UpdateLoginPacket { .. }
             | GetLoginPacket(..) => {
