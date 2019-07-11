@@ -229,19 +229,9 @@ impl SourceElder {
             //
             // ===== Mutable Data =====
             //
-            PutMData(_) => unimplemented!(),
-            GetMData(ref address) => unimplemented!(),
-            GetMDataValue { ref address, .. } => unimplemented!(),
             DeleteMData(ref address) => unimplemented!(),
-            GetMDataShell(ref address) => unimplemented!(),
-            GetMDataVersion(ref address) => unimplemented!(),
-            ListMDataEntries(ref address) => unimplemented!(),
-            ListMDataKeys(ref address) => unimplemented!(),
-            ListMDataValues(ref address) => unimplemented!(),
             SetMDataUserPermissions { ref address, .. } => unimplemented!(),
             DelMDataUserPermissions { ref address, .. } => unimplemented!(),
-            ListMDataPermissions(ref address) => unimplemented!(),
-            ListMDataUserPermissions { ref address, .. } => unimplemented!(),
             MutateSeqMDataEntries { ref address, .. } => unimplemented!(),
             MutateUnseqMDataEntries { ref address, .. } => unimplemented!(),
             //
@@ -250,6 +240,7 @@ impl SourceElder {
             PutAData(_) => unimplemented!(),
             GetAData(ref address) => unimplemented!(),
             GetADataShell { ref address, .. } => unimplemented!(),
+            GetADataValue { .. } => unimplemented!(),
             DeleteAData(ref address) => unimplemented!(),
             GetADataRange { ref address, .. } => unimplemented!(),
             GetADataIndices(ref address) => unimplemented!(),
@@ -304,7 +295,20 @@ impl SourceElder {
                 request,
                 message_id,
             })),
-            CreateLoginPacketFor { .. } | UpdateLoginPacket { .. } | GetLoginPacket(..) => {
+
+            GetMData(..)
+            | GetMDataVersion(..)
+            | GetMDataShell(..)
+            | GetMDataValue { .. }
+            | ListMDataPermissions(..)
+            | ListMDataUserPermissions { .. }
+            | PutMData(..)
+            | ListMDataEntries(..)
+            | ListMDataKeys(..)
+            | ListMDataValues(..)
+            | CreateLoginPacketFor { .. }
+            | UpdateLoginPacket { .. }
+            | GetLoginPacket(..) => {
                 // TODO: allow only registered clients to send this req
                 // once the coin balances are implemented.
 
@@ -592,7 +596,22 @@ impl SourceElder {
         #[allow(unused)]
         match response {
             // Transfer the response from destination elders to clients
-            GetLoginPacket(..) | Mutation(..) | GetIData(..) | Transaction(..) => {
+            Mutation(..)
+            | GetLoginPacket(..)
+            | GetMData(..)
+            | GetMDataShell(..)
+            | GetMDataVersion(..)
+            | ListUnseqMDataEntries(..)
+            | ListSeqMDataEntries(..)
+            | ListMDataKeys(..)
+            | ListSeqMDataValues(..)
+            | ListUnseqMDataValues(..)
+            | ListMDataUserPermissions(..)
+            | ListMDataPermissions(..)
+            | GetSeqMDataValue(..)
+            | GetUnseqMDataValue(..)
+            | GetIData(..)
+            | Transaction(..) => {
                 if let Some(peer_addr) = self.lookup_client_peer_addr(&requester) {
                     let peer = Peer::Client {
                         peer_addr: *peer_addr,
@@ -610,26 +629,12 @@ impl SourceElder {
                 None
             }
             //
-            // ===== Mutable Data =====
-            //
-            GetMData(result) => unimplemented!(),
-            GetMDataShell(result) => unimplemented!(),
-            GetMDataVersion(result) => unimplemented!(),
-            ListUnseqMDataEntries(result) => unimplemented!(),
-            ListSeqMDataEntries(result) => unimplemented!(),
-            ListMDataKeys(result) => unimplemented!(),
-            ListSeqMDataValues(result) => unimplemented!(),
-            ListUnseqMDataValues(result) => unimplemented!(),
-            ListMDataUserPermissions(result) => unimplemented!(),
-            ListMDataPermissions(result) => unimplemented!(),
-            GetSeqMDataValue(result) => unimplemented!(),
-            GetUnseqMDataValue(result) => unimplemented!(),
-            //
             // ===== Append Only Data =====
             //
             GetAData(result) => unimplemented!(),
             GetADataShell(result) => unimplemented!(),
             GetADataOwners(result) => unimplemented!(),
+            GetADataValue(result) => unimplemented!(),
             GetADataRange(result) => unimplemented!(),
             GetADataIndices(result) => unimplemented!(),
             GetADataLastEntry(result) => unimplemented!(),
