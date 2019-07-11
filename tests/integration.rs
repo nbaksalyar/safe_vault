@@ -56,9 +56,10 @@ mod common;
 use self::common::{Environment, TestClient, TestVault};
 use rand::{distributions::Standard, Rng};
 use safe_nd::{
-    Coins, EntryError, Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAddress,
-    MDataSeqEntryActions, MDataUnseqEntryActions, MDataValue, PubImmutableData, Request, Response,
-    SeqMutableData, UnpubImmutableData, UnseqMutableData, XorName,
+    Coins, EntryError, Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAction,
+    MDataAddress, MDataPermissionSet, MDataSeqEntryActions, MDataUnseqEntryActions, MDataValue,
+    PubImmutableData, Request, Response, SeqMutableData, UnpubImmutableData, UnseqMutableData,
+    XorName,
 };
 use safe_vault::COST_OF_PUT;
 use std::collections::BTreeMap;
@@ -1261,6 +1262,114 @@ fn mutate_unseq_mutable_data() {
 
     match client.expect_response(message_id) {
         Response::GetUnseqMDataValue(Err(NdError::NoSuchEntry)) => (),
+        x => unexpected!(x),
+    }
+}
+
+#[test]
+fn mutable_data_permissions() {
+    let mut env = Environment::new();
+    let mut vault = TestVault::new();
+    let conn_info = vault.connection_info();
+
+    let mut client_a = TestClient::new(env.rng());
+    let mut client_b = TestClient::new(env.rng());
+    common::establish_connection(&mut env, &mut client_a, &mut vault);
+    common::establish_connection(&mut env, &mut client_b, &mut vault);
+
+    // Try to put new unsequenced Mutable Data.
+    let name: XorName = env.rng().gen();
+    let tag = 100;
+    let mdata = UnseqMutableData::new(name, tag, *client_a.public_id().public_key());
+    let message_id = client_a.send_request(
+        conn_info.clone(),
+        Request::PutMData(MData::Unseq(mdata.clone())),
+    );
+    env.poll(&mut vault);
+
+    match client_a.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Make sure client B can't insert anything.
+    let actions = MDataUnseqEntryActions::new().ins(vec![0], vec![1]);
+    let message_id = client_b.send_request(
+        conn_info.clone(),
+        Request::MutateUnseqMDataEntries {
+            address: MDataAddress::Unseq { name, tag },
+            actions,
+        },
+    );
+    env.poll(&mut vault);
+
+    match client_b.expect_response(message_id) {
+        Response::Mutation(Err(NdError::AccessDenied)) => (),
+        x => unexpected!(x),
+    }
+
+    // Insert permissions for client B.
+    let message_id = client_a.send_request(
+        conn_info.clone(),
+        Request::SetMDataUserPermissions {
+            address: MDataAddress::Unseq { name, tag },
+            user: *client_b.public_id().public_key(),
+            permissions: MDataPermissionSet::new().allow(MDataAction::Insert),
+            version: 1,
+        },
+    );
+    env.poll(&mut vault);
+
+    match client_a.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Client B now can insert new values.
+    let actions = MDataUnseqEntryActions::new().ins(vec![0], vec![1]);
+    let message_id = client_b.send_request(
+        conn_info.clone(),
+        Request::MutateUnseqMDataEntries {
+            address: MDataAddress::Unseq { name, tag },
+            actions,
+        },
+    );
+    env.poll(&mut vault);
+
+    match client_b.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Delete client B permissions.
+    let message_id = client_a.send_request(
+        conn_info.clone(),
+        Request::DelMDataUserPermissions {
+            address: MDataAddress::Unseq { name, tag },
+            user: *client_b.public_id().public_key(),
+            version: 2,
+        },
+    );
+    env.poll(&mut vault);
+
+    match client_a.expect_response(message_id) {
+        Response::Mutation(Ok(())) => (),
+        x => unexpected!(x),
+    }
+
+    // Client B can't insert anything again.
+    let actions = MDataUnseqEntryActions::new().ins(vec![0], vec![1]);
+    let message_id = client_b.send_request(
+        conn_info.clone(),
+        Request::MutateUnseqMDataEntries {
+            address: MDataAddress::Unseq { name, tag },
+            actions,
+        },
+    );
+    env.poll(&mut vault);
+
+    match client_b.expect_response(message_id) {
+        Response::Mutation(Err(NdError::AccessDenied)) => (),
         x => unexpected!(x),
     }
 }

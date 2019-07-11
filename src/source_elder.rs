@@ -227,12 +227,6 @@ impl SourceElder {
                 self.handle_delete_unpub_idata(client, address, message_id, signature)
             }
             //
-            // ===== Mutable Data =====
-            //
-            DeleteMData(ref address) => unimplemented!(),
-            SetMDataUserPermissions { ref address, .. } => unimplemented!(),
-            DelMDataUserPermissions { ref address, .. } => unimplemented!(),
-            //
             // ===== Append Only Data =====
             //
             PutAData(_) => unimplemented!(),
@@ -306,6 +300,9 @@ impl SourceElder {
             | ListMDataValues(..)
             | MutateSeqMDataEntries { .. }
             | MutateUnseqMDataEntries { .. }
+            | DeleteMData(..)
+            | SetMDataUserPermissions { .. }
+            | DelMDataUserPermissions { .. }
             | CreateLoginPacketFor { .. }
             | UpdateLoginPacket { .. }
             | GetLoginPacket(..) => {
