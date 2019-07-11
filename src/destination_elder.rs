@@ -172,7 +172,9 @@ impl DestinationElder {
             GetMDataValue { address, ref key } => {
                 self.handle_get_mdata_value_req(&request, requester, address, key, message_id)
             }
-            DeleteMData(address) => unimplemented!(),
+            DeleteMData(address) => {
+                self.handle_delete_mdata_req(&request, requester, address, message_id)
+            }
             GetMDataShell(address) => {
                 self.handle_get_mdata_shell_req(&request, requester, address, message_id)
             }
@@ -198,14 +200,24 @@ impl DestinationElder {
             SetMDataUserPermissions {
                 address,
                 user,
+                ref permissions,
+                version,
+            } => self.handle_set_mdata_user_permissions_req(
+                &request,
+                requester,
+                address,
+                user,
                 permissions,
                 version,
-            } => unimplemented!(),
+                message_id,
+            ),
             DelMDataUserPermissions {
                 address,
                 user,
                 version,
-            } => unimplemented!(),
+            } => self.handle_del_mdata_user_permissions_req(
+                &request, requester, address, user, version, message_id,
+            ),
             MutateSeqMDataEntries { address, actions } => {
                 self.handle_mutate_seq_mdata_entries_req(requester, address, actions, message_id)
             }
@@ -442,6 +454,80 @@ impl DestinationElder {
                 response: Response::Mutation(result),
                 message_id,
             },
+        })
+    }
+
+    fn handle_delete_mdata_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let requester_pk = *utils::own_key(&requester)?;
+
+        let result = self
+            .mutable_chunks
+            .get(&address)
+            .map_err(|e| match e {
+                ChunkStoreError::NoSuchChunk => NdError::NoSuchData,
+                error => error.to_string().into(),
+            })
+            .and_then(move |mdata| {
+                mdata.check_permissions(request, requester_pk)?;
+
+                self.mutable_chunks
+                    .delete(&address)
+                    .map_err(|error| error.to_string().into())
+            });
+
+        Some(Action::RespondToSrcElders {
+            sender: *address.name(),
+            message: Rpc::Response {
+                requester,
+                response: Response::Mutation(result),
+                message_id,
+            },
+        })
+    }
+
+    /// Set MData user permissions.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_set_mdata_user_permissions_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        user: PublicKey,
+        permissions: &MDataPermissionSet,
+        version: u64,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let requester_pk = *utils::own_key(&requester)?;
+
+        self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
+            data.check_permissions(request, requester_pk)?;
+            data.set_user_permissions(user, permissions.clone(), version)?;
+            Ok(data)
+        })
+    }
+
+    /// Delete MData user permissions.
+    fn handle_del_mdata_user_permissions_req(
+        &mut self,
+        request: &Request,
+        requester: PublicId,
+        address: MDataAddress,
+        user: PublicKey,
+        version: u64,
+        message_id: MessageId,
+    ) -> Option<Action> {
+        let requester_pk = *utils::own_key(&requester)?;
+
+        self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
+            data.check_permissions(request, requester_pk)?;
+            data.del_user_permissions(user, version)?;
+            Ok(data)
         })
     }
 
