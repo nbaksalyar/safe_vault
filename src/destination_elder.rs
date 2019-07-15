@@ -24,8 +24,8 @@ use log::{error, info, trace, warn};
 use pickledb::PickleDb;
 use safe_nd::{
     Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAction, MDataAddress,
-    MDataPermissionSet, MDataReqPermission, MDataSeqEntryActions, MDataUnseqEntryActions,
-    MessageId, NodePublicId, PublicId, PublicKey, Request, Response, Result as NdResult, XorName,
+    MDataPermissionSet, MDataSeqEntryActions, MDataUnseqEntryActions, MessageId, NodePublicId,
+    PublicId, PublicKey, Request, Response, Result as NdResult, XorName,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -377,7 +377,7 @@ impl DestinationElder {
         &mut self,
         address: &MDataAddress,
         requester: &PublicId,
-        action: MDataReqPermission,
+        action: MDataAction,
     ) -> Option<NdResult<MData>> {
         let requester_pk = if let Some(pk) = utils::own_key(&requester) {
             pk
@@ -476,7 +476,7 @@ impl DestinationElder {
                 error => error.to_string().into(),
             })
             .and_then(move |mdata| {
-                mdata.check_permissions(MDataReqPermission::OnlyOwner, requester_pk)?;
+                mdata.check_is_owner(requester_pk)?;
 
                 self.mutable_chunks
                     .delete(&address)
@@ -506,10 +506,7 @@ impl DestinationElder {
         let requester_pk = *utils::own_key(&requester)?;
 
         self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
-            data.check_permissions(
-                MDataReqPermission::Required(MDataAction::ManagePermissions),
-                requester_pk,
-            )?;
+            data.check_permissions(MDataAction::ManagePermissions, requester_pk)?;
             data.set_user_permissions(user, permissions.clone(), version)?;
             Ok(data)
         })
@@ -527,10 +524,7 @@ impl DestinationElder {
         let requester_pk = *utils::own_key(&requester)?;
 
         self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
-            data.check_permissions(
-                MDataReqPermission::Required(MDataAction::ManagePermissions),
-                requester_pk,
-            )?;
+            data.check_permissions(MDataAction::ManagePermissions, requester_pk)?;
             data.del_user_permissions(user, version)?;
             Ok(data)
         })
@@ -591,11 +585,7 @@ impl DestinationElder {
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let result = self.get_mdata_chunk(
-            &address,
-            &requester,
-            MDataReqPermission::Required(MDataAction::Read),
-        )?;
+        let result = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         Some(Action::RespondToSrcElders {
             sender: *address.name(),
@@ -615,11 +605,7 @@ impl DestinationElder {
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(
-                &address,
-                &requester,
-                MDataReqPermission::Required(MDataAction::Read),
-            )?
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.shell());
 
         Some(Action::RespondToSrcElders {
@@ -640,11 +626,7 @@ impl DestinationElder {
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(
-                &address,
-                &requester,
-                MDataReqPermission::Required(MDataAction::Read),
-            )?
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.version());
 
         Some(Action::RespondToSrcElders {
@@ -665,11 +647,7 @@ impl DestinationElder {
         key: &[u8],
         message_id: MessageId,
     ) -> Option<Action> {
-        let res = self.get_mdata_chunk(
-            &address,
-            &requester,
-            MDataReqPermission::Required(MDataAction::Read),
-        )?;
+        let res = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         let response = if address.is_seq() {
             Response::GetSeqMDataValue(res.and_then(|data| match data {
@@ -711,11 +689,7 @@ impl DestinationElder {
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(
-                &address,
-                &requester,
-                MDataReqPermission::Required(MDataAction::Read),
-            )?
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.keys());
 
         Some(Action::RespondToSrcElders {
@@ -735,11 +709,7 @@ impl DestinationElder {
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let res = self.get_mdata_chunk(
-            &address,
-            &requester,
-            MDataReqPermission::Required(MDataAction::Read),
-        )?;
+        let res = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         let response = if address.is_seq() {
             Response::ListSeqMDataValues(res.and_then(|data| match data {
@@ -780,11 +750,7 @@ impl DestinationElder {
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let res = self.get_mdata_chunk(
-            &address,
-            &requester,
-            MDataReqPermission::Required(MDataAction::Read),
-        )?;
+        let res = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         let response = if address.is_seq() {
             Response::ListSeqMDataEntries(res.and_then(|data| match data {
@@ -826,11 +792,7 @@ impl DestinationElder {
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(
-                &address,
-                &requester,
-                MDataReqPermission::Required(MDataAction::Read),
-            )?
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.permissions());
 
         Some(Action::RespondToSrcElders {
@@ -852,11 +814,7 @@ impl DestinationElder {
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(
-                &address,
-                &requester,
-                MDataReqPermission::Required(MDataAction::Read),
-            )?
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .and_then(|data| data.user_permissions(user).map(MDataPermissionSet::clone));
 
         Some(Action::RespondToSrcElders {
