@@ -23,9 +23,9 @@ use idata_op::{IDataOp, OpType};
 use log::{error, info, trace, warn};
 use pickledb::PickleDb;
 use safe_nd::{
-    Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAddress, MDataPermissionSet,
-    MDataSeqEntryActions, MDataUnseqEntryActions, MessageId, NodePublicId, PublicId, PublicKey,
-    Request, Response, Result as NdResult, XorName,
+    Error as NdError, IData, IDataAddress, LoginPacket, MData, MDataAction, MDataAddress,
+    MDataPermissionSet, MDataSeqEntryActions, MDataUnseqEntryActions, MessageId, NodePublicId,
+    PublicId, PublicKey, Request, Response, Result as NdResult, XorName,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -166,44 +166,38 @@ impl DestinationElder {
             // ===== Mutable Data =====
             //
             PutMData(data) => self.handle_put_mdata_req(requester, data, message_id),
-            GetMData(address) => {
-                self.handle_get_mdata_req(&request, requester, address, message_id)
-            }
+            GetMData(address) => self.handle_get_mdata_req(requester, address, message_id),
             GetMDataValue { address, ref key } => {
-                self.handle_get_mdata_value_req(&request, requester, address, key, message_id)
+                self.handle_get_mdata_value_req(requester, address, key, message_id)
             }
-            DeleteMData(address) => {
-                self.handle_delete_mdata_req(&request, requester, address, message_id)
-            }
+            DeleteMData(address) => self.handle_delete_mdata_req(requester, address, message_id),
             GetMDataShell(address) => {
-                self.handle_get_mdata_shell_req(&request, requester, address, message_id)
+                self.handle_get_mdata_shell_req(requester, address, message_id)
             }
             GetMDataVersion(address) => {
-                self.handle_get_mdata_version_req(&request, requester, address, message_id)
+                self.handle_get_mdata_version_req(requester, address, message_id)
             }
             ListMDataEntries(address) => {
-                self.handle_list_mdata_entries_req(&request, requester, address, message_id)
+                self.handle_list_mdata_entries_req(requester, address, message_id)
             }
             ListMDataKeys(address) => {
-                self.handle_list_mdata_keys_req(&request, requester, address, message_id)
+                self.handle_list_mdata_keys_req(requester, address, message_id)
             }
             ListMDataValues(address) => {
-                self.handle_list_mdata_values_req(&request, requester, address, message_id)
+                self.handle_list_mdata_values_req(requester, address, message_id)
             }
             ListMDataPermissions(address) => {
-                self.handle_list_mdata_permissions_req(&request, requester, address, message_id)
+                self.handle_list_mdata_permissions_req(requester, address, message_id)
             }
-            ListMDataUserPermissions { address, user } => self
-                .handle_list_mdata_user_permissions_req(
-                    &request, requester, address, user, message_id,
-                ),
+            ListMDataUserPermissions { address, user } => {
+                self.handle_list_mdata_user_permissions_req(requester, address, user, message_id)
+            }
             SetMDataUserPermissions {
                 address,
                 user,
                 ref permissions,
                 version,
             } => self.handle_set_mdata_user_permissions_req(
-                &request,
                 requester,
                 address,
                 user,
@@ -216,7 +210,7 @@ impl DestinationElder {
                 user,
                 version,
             } => self.handle_del_mdata_user_permissions_req(
-                &request, requester, address, user, version, message_id,
+                requester, address, user, version, message_id,
             ),
             MutateSeqMDataEntries { address, actions } => {
                 self.handle_mutate_seq_mdata_entries_req(requester, address, actions, message_id)
@@ -375,26 +369,36 @@ impl DestinationElder {
         }
     }
 
-    /// Get MData from the chunk store and check permissions.
+    /// Get `MData` from the chunk store and check permissions.
+    /// Returns `Some(Result<..>)` if the flow should be continued, returns
+    /// `None` if there was a logic error encountered and the flow should be
+    /// terminated.
     fn get_mdata_chunk(
         &mut self,
         address: &MDataAddress,
         requester: &PublicId,
-        request: &Request,
-    ) -> NdResult<MData> {
-        let requester_pk = utils::own_key(&requester).ok_or_else(|| NdError::AccessDenied)?;
+        action: MDataAction,
+    ) -> Option<NdResult<MData>> {
+        let requester_pk = if let Some(pk) = utils::own_key(&requester) {
+            pk
+        } else {
+            error!("Logic error: requester {:?} must not be Node", requester);
+            return None;
+        };
 
-        self.mutable_chunks
-            .get(&address)
-            .map_err(|e| match e {
-                ChunkStoreError::NoSuchChunk => NdError::NoSuchData,
-                error => error.to_string().into(),
-            })
-            .and_then(move |mdata| {
-                mdata
-                    .check_permissions(request, *requester_pk)
-                    .map(move |_| mdata)
-            })
+        Some(
+            self.mutable_chunks
+                .get(&address)
+                .map_err(|e| match e {
+                    ChunkStoreError::NoSuchChunk => NdError::NoSuchData,
+                    error => error.to_string().into(),
+                })
+                .and_then(move |mdata| {
+                    mdata
+                        .check_permissions(action, *requester_pk)
+                        .map(move |_| mdata)
+                }),
+        )
     }
 
     /// Get MData from the chunk store, update it, and overwrite the stored chunk.
@@ -442,7 +446,6 @@ impl DestinationElder {
         let result = if self.mutable_chunks.has(data.address()) {
             Err(NdError::DataExists)
         } else {
-            // TODO: check owner
             self.mutable_chunks
                 .put(&data)
                 .map_err(|error| error.to_string().into())
@@ -459,7 +462,6 @@ impl DestinationElder {
 
     fn handle_delete_mdata_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
@@ -474,7 +476,7 @@ impl DestinationElder {
                 error => error.to_string().into(),
             })
             .and_then(move |mdata| {
-                mdata.check_permissions(request, requester_pk)?;
+                mdata.check_is_owner(requester_pk)?;
 
                 self.mutable_chunks
                     .delete(&address)
@@ -492,10 +494,8 @@ impl DestinationElder {
     }
 
     /// Set MData user permissions.
-    #[allow(clippy::too_many_arguments)]
     fn handle_set_mdata_user_permissions_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         user: PublicKey,
@@ -506,7 +506,7 @@ impl DestinationElder {
         let requester_pk = *utils::own_key(&requester)?;
 
         self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
-            data.check_permissions(request, requester_pk)?;
+            data.check_permissions(MDataAction::ManagePermissions, requester_pk)?;
             data.set_user_permissions(user, permissions.clone(), version)?;
             Ok(data)
         })
@@ -515,7 +515,6 @@ impl DestinationElder {
     /// Delete MData user permissions.
     fn handle_del_mdata_user_permissions_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         user: PublicKey,
@@ -525,7 +524,7 @@ impl DestinationElder {
         let requester_pk = *utils::own_key(&requester)?;
 
         self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
-            data.check_permissions(request, requester_pk)?;
+            data.check_permissions(MDataAction::ManagePermissions, requester_pk)?;
             data.del_user_permissions(user, version)?;
             Ok(data)
         })
@@ -544,7 +543,12 @@ impl DestinationElder {
         self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
             match data {
                 MData::Seq(ref mut mdata) => mdata.mutate_entries(actions, requester_pk)?,
-                MData::Unseq(..) => return Err(NdError::NoSuchData), // FIXME
+                MData::Unseq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    return Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ));
+                }
             }
             Ok(data)
         })
@@ -563,7 +567,12 @@ impl DestinationElder {
         self.mutate_mdata_chunk(&address, requester, message_id, move |mut data| {
             match data {
                 MData::Unseq(ref mut mdata) => mdata.mutate_entries(actions, requester_pk)?,
-                MData::Seq(..) => return Err(NdError::NoSuchData), // FIXME
+                MData::Seq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    return Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ));
+                }
             }
             Ok(data)
         })
@@ -572,12 +581,11 @@ impl DestinationElder {
     /// Get entire MData.
     fn handle_get_mdata_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let result = self.get_mdata_chunk(&address, &requester, request);
+        let result = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         Some(Action::RespondToSrcElders {
             sender: *address.name(),
@@ -592,13 +600,12 @@ impl DestinationElder {
     /// Get MData shell.
     fn handle_get_mdata_shell_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(&address, &requester, request)
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.shell());
 
         Some(Action::RespondToSrcElders {
@@ -614,13 +621,12 @@ impl DestinationElder {
     /// Get MData version.
     fn handle_get_mdata_version_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(&address, &requester, request)
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.version());
 
         Some(Action::RespondToSrcElders {
@@ -636,23 +642,32 @@ impl DestinationElder {
     /// Get MData value.
     fn handle_get_mdata_value_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         key: &[u8],
         message_id: MessageId,
     ) -> Option<Action> {
-        let res = self.get_mdata_chunk(&address, &requester, request);
+        let res = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         let response = if address.is_seq() {
             Response::GetSeqMDataValue(res.and_then(|data| match data {
                 MData::Seq(md) => md.get(key).cloned().ok_or_else(|| NdError::NoSuchEntry),
-                MData::Unseq(..) => Err(NdError::AccessDenied), // FIXME
+                MData::Unseq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ))
+                }
             }))
         } else {
             Response::GetUnseqMDataValue(res.and_then(|data| match data {
                 MData::Unseq(md) => md.get(key).cloned().ok_or_else(|| NdError::NoSuchEntry),
-                MData::Seq(..) => Err(NdError::AccessDenied), // FIXME
+                MData::Seq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ))
+                }
             }))
         };
 
@@ -669,13 +684,12 @@ impl DestinationElder {
     /// Get MData keys.
     fn handle_list_mdata_keys_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(&address, &requester, request)
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.keys());
 
         Some(Action::RespondToSrcElders {
@@ -691,22 +705,31 @@ impl DestinationElder {
     /// Get MData values.
     fn handle_list_mdata_values_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let res = self.get_mdata_chunk(&address, &requester, request);
+        let res = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         let response = if address.is_seq() {
             Response::ListSeqMDataValues(res.and_then(|data| match data {
                 MData::Seq(md) => Ok(md.values()),
-                MData::Unseq(..) => Err(NdError::AccessDenied), // FIXME
+                MData::Unseq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ))
+                }
             }))
         } else {
             Response::ListUnseqMDataValues(res.and_then(|data| match data {
                 MData::Unseq(md) => Ok(md.values()),
-                MData::Seq(..) => Err(NdError::AccessDenied), // FIXME
+                MData::Seq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ))
+                }
             }))
         };
 
@@ -723,22 +746,31 @@ impl DestinationElder {
     /// Get MData entries.
     fn handle_list_mdata_entries_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
-        let res = self.get_mdata_chunk(&address, &requester, request);
+        let res = self.get_mdata_chunk(&address, &requester, MDataAction::Read)?;
 
         let response = if address.is_seq() {
             Response::ListSeqMDataEntries(res.and_then(|data| match data {
                 MData::Seq(md) => Ok(md.entries().clone()),
-                MData::Unseq(..) => Err(NdError::AccessDenied), // FIXME
+                MData::Unseq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ))
+                }
             }))
         } else {
             Response::ListUnseqMDataEntries(res.and_then(|data| match data {
                 MData::Unseq(md) => Ok(md.entries().clone()),
-                MData::Seq(..) => Err(NdError::AccessDenied), // FIXME
+                MData::Seq(..) => {
+                    error!("Logic error - unexpected chunk stored at {:?}", address);
+                    Err(NdError::NetworkOther(
+                        "Logic error - unexpected chunk".to_string(),
+                    ))
+                }
             }))
         };
 
@@ -755,13 +787,12 @@ impl DestinationElder {
     /// Get MData permissions.
     fn handle_list_mdata_permissions_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(&address, &requester, request)
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .map(|data| data.permissions());
 
         Some(Action::RespondToSrcElders {
@@ -777,14 +808,13 @@ impl DestinationElder {
     /// Get MData user permissions.
     fn handle_list_mdata_user_permissions_req(
         &mut self,
-        request: &Request,
         requester: PublicId,
         address: MDataAddress,
         user: PublicKey,
         message_id: MessageId,
     ) -> Option<Action> {
         let result = self
-            .get_mdata_chunk(&address, &requester, request)
+            .get_mdata_chunk(&address, &requester, MDataAction::Read)?
             .and_then(|data| data.user_permissions(user).map(MDataPermissionSet::clone));
 
         Some(Action::RespondToSrcElders {

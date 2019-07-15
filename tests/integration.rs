@@ -823,16 +823,12 @@ fn put_seq_mutable_data() {
     let name: XorName = env.rng().gen();
     let tag = 100;
     let mdata = SeqMutableData::new(name, tag, *client.public_id().public_key());
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::PutMData(MData::Seq(mdata.clone())),
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get Mutable Data and verify it's been stored correctly.
     let message_id = client.send_request(
@@ -860,16 +856,12 @@ fn put_unseq_mutable_data() {
     let name: XorName = env.rng().gen();
     let tag = 100;
     let mdata = UnseqMutableData::new(name, tag, *client.public_id().public_key());
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::PutMData(MData::Unseq(mdata.clone())),
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get Mutable Data and verify it's been stored correctly.
     let message_id = client.send_request(
@@ -913,16 +905,12 @@ fn read_seq_mutable_data() {
         Default::default(),
         *client.public_id().public_key(),
     );
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::PutMData(MData::Seq(mdata.clone())),
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get version.
     let message_id = client.send_request(
@@ -1004,16 +992,12 @@ fn mutate_seq_mutable_data() {
     let name: XorName = env.rng().gen();
     let tag = 100;
     let mdata = SeqMutableData::new(name, tag, *client.public_id().public_key());
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::PutMData(MData::Seq(mdata.clone())),
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get a non-existant value by key.
     let message_id = client.send_request(
@@ -1034,19 +1018,15 @@ fn mutate_seq_mutable_data() {
     let actions = MDataSeqEntryActions::new()
         .ins(vec![0], vec![1], 0)
         .ins(vec![1], vec![1], 0);
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::MutateSeqMDataEntries {
             address: MDataAddress::Seq { name, tag },
             actions,
         },
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get an existing value by key.
     let message_id = client.send_request(
@@ -1073,19 +1053,15 @@ fn mutate_seq_mutable_data() {
     let actions = MDataSeqEntryActions::new()
         .update(vec![0], vec![2], 1)
         .del(vec![1], 1);
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::MutateSeqMDataEntries {
             address: MDataAddress::Seq { name, tag },
             actions,
         },
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get an existing value by key.
     let message_id = client.send_request(
@@ -1158,16 +1134,12 @@ fn mutate_unseq_mutable_data() {
     let name: XorName = env.rng().gen();
     let tag = 100;
     let mdata = UnseqMutableData::new(name, tag, *client.public_id().public_key());
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::PutMData(MData::Unseq(mdata.clone())),
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get a non-existant value by key.
     let message_id = client.send_request(
@@ -1188,19 +1160,15 @@ fn mutate_unseq_mutable_data() {
     let actions = MDataUnseqEntryActions::new()
         .ins(vec![0], vec![1])
         .ins(vec![1], vec![1]);
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::MutateUnseqMDataEntries {
             address: MDataAddress::Unseq { name, tag },
             actions,
         },
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get an existing value by key.
     let message_id = client.send_request(
@@ -1221,19 +1189,15 @@ fn mutate_unseq_mutable_data() {
     let actions = MDataUnseqEntryActions::new()
         .update(vec![0], vec![2])
         .del(vec![1]);
-    let message_id = client.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client,
+        &mut vault,
         Request::MutateUnseqMDataEntries {
             address: MDataAddress::Unseq { name, tag },
             actions,
         },
     );
-    env.poll(&mut vault);
-
-    match client.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Get an existing value by key.
     let message_id = client.send_request(
@@ -1281,16 +1245,13 @@ fn mutable_data_permissions() {
     let name: XorName = env.rng().gen();
     let tag = 100;
     let mdata = UnseqMutableData::new(name, tag, *client_a.public_id().public_key());
-    let message_id = client_a.send_request(
-        conn_info.clone(),
+
+    common::perform_mutation(
+        &mut env,
+        &mut client_a,
+        &mut vault,
         Request::PutMData(MData::Unseq(mdata.clone())),
     );
-    env.poll(&mut vault);
-
-    match client_a.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Make sure client B can't insert anything.
     let actions = MDataUnseqEntryActions::new().ins(vec![0], vec![1]);
@@ -1309,8 +1270,10 @@ fn mutable_data_permissions() {
     }
 
     // Insert permissions for client B.
-    let message_id = client_a.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client_a,
+        &mut vault,
         Request::SetMDataUserPermissions {
             address: MDataAddress::Unseq { name, tag },
             user: *client_b.public_id().public_key(),
@@ -1318,44 +1281,30 @@ fn mutable_data_permissions() {
             version: 1,
         },
     );
-    env.poll(&mut vault);
-
-    match client_a.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Client B now can insert new values.
     let actions = MDataUnseqEntryActions::new().ins(vec![0], vec![1]);
-    let message_id = client_b.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client_b,
+        &mut vault,
         Request::MutateUnseqMDataEntries {
             address: MDataAddress::Unseq { name, tag },
             actions,
         },
     );
-    env.poll(&mut vault);
-
-    match client_b.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Delete client B permissions.
-    let message_id = client_a.send_request(
-        conn_info.clone(),
+    common::perform_mutation(
+        &mut env,
+        &mut client_a,
+        &mut vault,
         Request::DelMDataUserPermissions {
             address: MDataAddress::Unseq { name, tag },
             user: *client_b.public_id().public_key(),
             version: 2,
         },
     );
-    env.poll(&mut vault);
-
-    match client_a.expect_response(message_id) {
-        Response::Mutation(Ok(())) => (),
-        x => unexpected!(x),
-    }
 
     // Client B can't insert anything again.
     let actions = MDataUnseqEntryActions::new().ins(vec![0], vec![1]);
