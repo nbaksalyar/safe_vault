@@ -1108,6 +1108,14 @@ impl ClientHandler {
         message_id: MessageId,
         response: Response,
     ) {
+        trace!(
+            "{}: Sending response ({:?} {:?}) to client {:?}",
+            self,
+            response,
+            message_id,
+            client_id
+        );
+
         let peer_addr = if let Some(peer_addr) = self.lookup_client_peer_addr(client_id) {
             *peer_addr
         } else {
@@ -1125,6 +1133,7 @@ impl ClientHandler {
     }
 
     fn lookup_client_peer_addr(&self, id: &PublicId) -> Option<&SocketAddr> {
+        trace!("Connected clients: {:?}", self.clients);
         self.clients
             .iter()
             .find(|(_, client)| &client.public_id == id)

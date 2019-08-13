@@ -67,16 +67,31 @@ fn main() {
 
 #[cfg(not(feature = "mock"))]
 mod detail {
-    use env_logger;
-    use log;
+    use env_logger::{fmt::Formatter, Builder as LoggerBuilder};
+    use log::{self, Record};
     use safe_vault::{self, Command, Config, Vault};
     use self_update::Status;
-    use std::process;
+    use std::{io::Write, process};
     use structopt::StructOpt;
 
     /// Runs a SAFE Network vault.
     pub fn main() {
-        env_logger::init();
+        let do_format = move |formatter: &mut Formatter, record: &Record<'_>| {
+            let now = formatter.timestamp();
+            writeln!(
+                formatter,
+                "{} {} [{}:{}] {}",
+                formatter.default_styled_level(record.level()),
+                now,
+                record.file().unwrap_or_default(),
+                record.line().unwrap_or_default(),
+                record.args()
+            )
+        };
+        let _ = LoggerBuilder::from_default_env()
+            .format(do_format)
+            .is_test(false)
+            .try_init();
 
         match update() {
             Ok(status) => {

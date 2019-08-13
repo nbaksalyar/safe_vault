@@ -72,6 +72,7 @@ impl Config {
             root_dir: None,
             quic_p2p_config: Default::default(),
         });
+        // config.quic_p2p_config.idle_timeout_msec = Some(0);
 
         let command_line_args = Config::clap().get_matches();
         for arg in &ARGS {
