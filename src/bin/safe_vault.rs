@@ -133,7 +133,7 @@ mod detail {
         }
     }
 
-    fn update() -> Result<Status, Box<::std::error::Error>> {
+    fn update() -> Result<Status, Box<dyn (::std::error::Error)>> {
         log::info!("Checking for updates...");
         let target = self_update::get_target()?;
         let releases = self_update::backends::github::ReleaseList::configure()

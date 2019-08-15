@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "quic-p2p"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1698,7 +1698,7 @@ dependencies = [
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "maplit 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pickledb 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "quic-p2p 0.2.0",
+ "quic-p2p 0.2.1",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand_chacha 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
