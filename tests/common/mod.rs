@@ -24,6 +24,7 @@ use safe_nd::{
 use safe_vault::{
     mock::Network,
     quic_p2p::{self, Builder, Event, NodeInfo, OurType, Peer, QuicP2p},
+    routing::Node,
     Config, Vault,
 };
 use serde::Serialize;
@@ -47,11 +48,12 @@ macro_rules! unexpected {
 pub struct Environment {
     rng: TestRng,
     network: Network,
-    vault: TestVault,
+    vaults: Vec<TestVault>,
+    counter: usize,
 }
 
 impl Environment {
-    pub fn new() -> Self {
+    pub fn with_multiple_vaults(num_vaults: usize) -> Self {
         let do_format = move |formatter: &mut Formatter, record: &Record<'_>| {
             let now = formatter.timestamp();
             writeln!(
@@ -73,11 +75,23 @@ impl Environment {
         let mut rng = rng::new();
         let network_rng = rng::from_rng(&mut rng);
 
+        let network = Network::new(network_rng);
+
+        let mut vaults = Vec::with_capacity(num_vaults);
+        for _i in 0..num_vaults {
+            vaults.push(TestVault::new());
+        }
+
         Self {
             rng,
-            network: Network::new(network_rng),
-            vault: TestVault::new(),
+            network,
+            vaults,
+            counter: 0,
         }
+    }
+
+    pub fn new() -> Self {
+        Self::with_multiple_vaults(4)
     }
 
     pub fn rng(&mut self) -> &mut TestRng {
@@ -89,7 +103,7 @@ impl Environment {
         let mut progress = true;
         while progress {
             self.network.poll();
-            progress = self.vault.inner.poll();
+            progress = self.vaults.iter_mut().any(|vault| vault.inner.poll());
         }
     }
 
@@ -110,7 +124,10 @@ impl Environment {
     }
 
     pub fn establish_connection<T: TestClientTrait>(&mut self, client: &mut T) {
-        let conn_info = self.vault.connection_info();
+        self.counter += 1;
+        let vaults_num = self.vaults.len();
+
+        let conn_info = self.vaults[self.counter % vaults_num].connection_info();
         client.quic_p2p().connect_to(conn_info.clone());
         self.poll();
 
@@ -138,7 +155,8 @@ impl TestVault {
 
         let (_, command_rx) = crossbeam_channel::bounded(0);
 
-        let inner = unwrap!(Vault::new(config, command_rx));
+        let routing_node = unwrap!(Node::builder().create_with_outbox());
+        let inner = unwrap!(Vault::new(routing_node, config, command_rx));
 
         Self {
             inner,

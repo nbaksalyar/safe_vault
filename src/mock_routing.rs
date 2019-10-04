@@ -7,11 +7,27 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use crossbeam_channel::TryRecvError;
+use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::{Rc, Weak};
+
+struct ConsensusGroup {
+    nodes: Vec<Rc<RefCell<Node>>>,
+}
+
+impl ConsensusGroup {
+    fn vote_for(&self, event: Vec<u8>) {
+        for node in &self.nodes {
+            let mut node_ref = node.borrow_mut();
+            node_ref.events.push_back(event.clone());
+        }
+    }
+}
 
 /// Interface for sending and receiving messages to and from other nodes, in the role of a full routing node.
 pub struct Node {
     events: VecDeque<Vec<u8>>,
+    consensus_group: Option<Weak<ConsensusGroup>>,
 }
 
 impl Node {
@@ -22,7 +38,11 @@ impl Node {
 
     /// Vote for an event.
     pub fn vote_for(&mut self, event: Vec<u8>) {
-        self.events.push_back(event);
+        if let Some(ref consensus_group) = self.consensus_group {
+            let _ = consensus_group.upgrade().map(|group| group.vote_for(event));
+        } else {
+            self.events.push_back(event);
+        }
     }
 
     /// Try to read the next available event from the stream without blocking.
@@ -46,6 +66,18 @@ impl NodeBuilder {
     pub fn create(self) -> Result<Node, RoutingError> {
         Ok(Node {
             events: VecDeque::with_capacity(128),
+            consensus_group: None,
+        })
+    }
+
+    /// Creates new `Node` with a shared outbox.
+    pub fn create_within_group(
+        self,
+        consensus_group: Rc<ConsensusGroup>,
+    ) -> Result<Node, RoutingError> {
+        Ok(Node {
+            events: VecDeque::with_capacity(128),
+            consensus_group: Some(Rc::downgrade(&consensus_group)),
         })
     }
 }
