@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 // TODO: make these tests work without mock too.
-#![cfg(feature = "mock")]
+#![cfg(any(feature = "mock", feature = "mock-parsec"))]
 // For explanation of lint checks, run `rustc -W help`.
 #![deny(unsafe_code)]
 #![warn(

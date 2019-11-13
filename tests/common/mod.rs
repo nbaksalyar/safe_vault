@@ -39,7 +39,7 @@ use tempdir::TempDir;
 use unwrap::unwrap;
 
 /// Default number of vaults to run the tests with.
-const DEFAULT_NUM_VAULTS: usize = 5;
+const DEFAULT_NUM_VAULTS: usize = 1;
 
 macro_rules! unexpected {
     ($e:expr) => {
@@ -51,6 +51,7 @@ pub struct Environment {
     rng: TestRng,
     network: Network,
     vaults: Vec<TestVault>,
+    #[cfg(not(feature = "mock-parsec"))]
     _consensus_group: ConsensusGroupRef,
 }
 
